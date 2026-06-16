@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Trash2, Plus, ChevronRight, UserPlus } from 'lucide-react'
 import PageHeader from '@/components/ui/PageHeader'
@@ -41,6 +41,14 @@ type QuoteItem = {
 
 type Salesperson = { id: string; name: string }
 
+type ContextPhoto = {
+  tempId: string
+  url: string | null
+  file: File | null
+  previewUrl: string | null
+  description: string
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const QUOTE_TYPES: { value: SurfaceType; label: string }[] = [
@@ -49,13 +57,21 @@ const QUOTE_TYPES: { value: SurfaceType; label: string }[] = [
   { value: 'both', label: 'Both' },
 ]
 
-const STATUS_CYCLE: QuoteStatus[] = ['quoted', 'thinking_about_it', 'sold', 'not_interested']
+const STATUS_CYCLE: QuoteStatus[] = [
+  'quoted',
+  'thinking_about_it',
+  'sold',
+  'not_interested_right_now',
+  'not_interested_at_all',
+]
 
 const STATUS_META: Record<QuoteStatus, { label: string; cls: string }> = {
   quoted: { label: 'Quoted', cls: 'bg-info/15 text-info border-info/30' },
   thinking_about_it: { label: 'Thinking About It', cls: 'bg-warning/15 text-warning border-warning/30' },
   sold: { label: 'Sold', cls: 'bg-accent/15 text-accent border-accent/30' },
-  not_interested: { label: 'Not Interested', cls: 'bg-danger/15 text-danger border-danger/30' },
+  not_interested_right_now: { label: 'Not Interested Right Now', cls: 'bg-white/8 text-muted border-white/15' },
+  not_interested_at_all: { label: 'Not Interested At All', cls: 'bg-danger/15 text-danger border-danger/30' },
+  not_interested: { label: 'Not Interested', cls: 'bg-danger/15 text-danger border-danger/30' }, // legacy rows
 }
 
 const PAYMENT_TYPES = ['Card', 'Cash', 'E-Transfer', 'Check', 'Other']
@@ -126,9 +142,9 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
   const router = useRouter()
   const isEdit = !!quoteId
 
-  // Salesperson
+  // Salesperson (multiple allowed per quote)
   const [salespersons, setSalespersons] = useState<Salesperson[]>([])
-  const [salesperson, setSalesperson] = useState('')
+  const [selectedSalespersons, setSelectedSalespersons] = useState<string[]>([])
   const [showAddSp, setShowAddSp] = useState(false)
   const [newSpName, setNewSpName] = useState('')
   const [savingSp, setSavingSp] = useState(false)
@@ -165,8 +181,13 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
   const asphaltPreview = useMemo(() => (asphaltFile ? URL.createObjectURL(asphaltFile) : null), [asphaltFile])
   const concretePreview = useMemo(() => (concreteFile ? URL.createObjectURL(concreteFile) : null), [concreteFile])
 
+  // Context photos (damage, surface conditions, problem areas — each with a description)
+  const [contextPhotos, setContextPhotos] = useState<ContextPhoto[]>([])
+  const contextInputRef = useRef<HTMLInputElement>(null)
+
   // Notes
   const [notes, setNotes] = useState('')
+  const [followUpNotes, setFollowUpNotes] = useState('')
 
   // UI state
   const [loading, setLoading] = useState(isEdit)
@@ -227,7 +248,7 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     const { data: q } = await supabase
       .from('quotes')
       .select(
-        'salesperson, customer_name, customer_phone, address, quote_type, status, notes, actual_price, discount, tax, sold_price, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, line_items, job_id, created_at'
+        'salesperson, customer_name, customer_phone, address, quote_type, status, notes, follow_up_notes, actual_price, discount, tax, sold_price, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at'
       )
       .eq('id', quoteId)
       .single()
@@ -237,13 +258,19 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       return
     }
 
-    setSalesperson(q.salesperson ?? '')
+    setSelectedSalespersons(
+      (q.salesperson ?? '')
+        .split(',')
+        .map((s: string) => s.trim())
+        .filter(Boolean)
+    )
     setCustomerName(q.customer_name ?? '')
     setPhone(q.customer_phone ?? '')
     setAddress(q.address ?? '')
     setQuoteType((q.quote_type as SurfaceType) ?? 'asphalt')
     setStatus((q.status as QuoteStatus) ?? 'quoted')
     setNotes(q.notes ?? '')
+    setFollowUpNotes(q.follow_up_notes ?? '')
     setSubtotal(q.actual_price != null ? String(q.actual_price) : '')
     setDiscount(q.discount != null ? String(q.discount) : '')
     if (q.tax != null) {
@@ -255,6 +282,17 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     setPaymentOther(q.payment_type_other ?? '')
     setAsphaltUrl(q.asphalt_photo_url ?? null)
     setConcreteUrl(q.concrete_photo_url ?? null)
+    setContextPhotos(
+      Array.isArray(q.context_photos)
+        ? q.context_photos.map((p: Record<string, unknown>) => ({
+            tempId: crypto.randomUUID(),
+            url: p.url != null ? String(p.url) : null,
+            file: null,
+            previewUrl: null,
+            description: p.description != null ? String(p.description) : '',
+          }))
+        : []
+    )
     setExistingJobId(q.job_id ?? null)
     if (q.created_at) setQuoteDate(String(q.created_at).slice(0, 10))
     setItems(
@@ -278,6 +316,12 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
 
   // ─── Salesperson handlers ─────────────────────────────────────────────────────
 
+  function toggleSalesperson(name: string) {
+    setSelectedSalespersons(prev =>
+      prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]
+    )
+  }
+
   async function addSalesperson() {
     const name = newSpName.trim()
     if (!name) return
@@ -290,7 +334,7 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     setSavingSp(false)
     if (!error && data) {
       setSalespersons(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)))
-      setSalesperson(data.name)
+      setSelectedSalespersons(prev => (prev.includes(data.name) ? prev : [...prev, data.name]))
       setNewSpName('')
       setShowAddSp(false)
     }
@@ -334,6 +378,29 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     setItems(prev => prev.map(i => (i.tempId === tempId ? { ...i, tier: nextTier(i.tier) } : i)))
   }
 
+  // ─── Context photo handlers ─────────────────────────────────────────────────────
+
+  function addContextPhotos(files: FileList | null) {
+    if (!files || files.length === 0) return
+    const additions: ContextPhoto[] = Array.from(files).map(file => ({
+      tempId: crypto.randomUUID(),
+      url: null,
+      file,
+      previewUrl: URL.createObjectURL(file),
+      description: '',
+    }))
+    setContextPhotos(prev => [...prev, ...additions])
+    if (contextInputRef.current) contextInputRef.current.value = ''
+  }
+
+  function setContextDescription(tempId: string, description: string) {
+    setContextPhotos(prev => prev.map(p => (p.tempId === tempId ? { ...p, description } : p)))
+  }
+
+  function removeContextPhoto(tempId: string) {
+    setContextPhotos(prev => prev.filter(p => p.tempId !== tempId))
+  }
+
   // ─── Save ─────────────────────────────────────────────────────────────────────
 
   async function uploadPhoto(file: File, prefix: string): Promise<string | null> {
@@ -363,6 +430,20 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       // non-fatal — proceed without blocking the save
     }
 
+    // Upload any newly-added context photos, then build the saved array.
+    const contextPhotosPayload: { url: string; description: string }[] = []
+    for (const p of contextPhotos) {
+      let url = p.url
+      if (!url && p.file) {
+        try {
+          url = await uploadPhoto(p.file, 'context')
+        } catch {
+          url = null
+        }
+      }
+      if (url) contextPhotosPayload.push({ url, description: p.description.trim() })
+    }
+
     const lineItems = items.map(i => ({
       serviceRateId: i.serviceRateId,
       serviceName: i.serviceName,
@@ -378,13 +459,14 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
 
     const payload: Record<string, unknown> = {
       business_id: BUSINESS_ID,
-      salesperson: salesperson || null,
+      salesperson: selectedSalespersons.length ? selectedSalespersons.join(', ') : null,
       customer_name: customerName.trim(),
       customer_phone: phone.trim() || null,
       address: address.trim() || null,
       quote_type: quoteType,
       status,
       notes: notes.trim() || null,
+      follow_up_notes: followUpNotes.trim() || null,
       suggested_total: suggested,
       suggested_lowest_total: suggestedLowest,
       actual_price: subtotal === '' ? null : num(subtotal),
@@ -396,6 +478,7 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       payment_type_other: paymentType === 'Other' ? paymentOther.trim() || null : null,
       asphalt_photo_url: quoteType === 'concrete' ? null : aUrl,
       concrete_photo_url: quoteType === 'asphalt' ? null : cUrl,
+      context_photos: contextPhotosPayload,
       line_items: lineItems,
       created_at: new Date(quoteDate + 'T12:00:00').toISOString(),
     }
@@ -434,7 +517,9 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       ...items.map(i => `${i.serviceName} — ${num(i.quantity)} ${i.unit} (${i.tier})`),
       `Final quote: ${fmtMoney(finalQuote)}`,
       `Balance due: ${fmtMoney(balanceDue)}`,
-      salesperson ? `Salesperson: ${salesperson}` : null,
+      selectedSalespersons.length
+        ? `Salesperson: ${selectedSalespersons.join(', ')}`
+        : null,
     ]
       .filter(Boolean)
       .join('\n')
@@ -570,27 +655,34 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
             Salesperson
           </h2>
           <Card>
-            <div className="flex items-end gap-2">
-              <div className="flex-1">
-                <div className="relative">
-                  <select
-                    value={salesperson}
-                    onChange={e => setSalesperson(e.target.value)}
-                    className="w-full h-11 px-3.5 pr-10 bg-surface border border-white/8 rounded-xl text-foreground text-sm appearance-none focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors"
-                  >
-                    <option value="">Select salesperson…</option>
-                    {salespersons.map(sp => (
-                      <option key={sp.id} value={sp.name}>
+            <div className="space-y-3">
+              <p className="text-xs text-muted">Tap to assign one or more salespeople.</p>
+              {salespersons.length === 0 ? (
+                <p className="text-sm text-muted">No salespeople yet. Add one to get started.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {salespersons.map(sp => {
+                    const active = selectedSalespersons.includes(sp.name)
+                    return (
+                      <button
+                        key={sp.id}
+                        type="button"
+                        onClick={() => toggleSalesperson(sp.name)}
+                        className={`px-3 py-2 rounded-xl text-sm font-medium border transition-all active:scale-95 ${
+                          active
+                            ? 'bg-accent/15 text-accent border-accent/30'
+                            : 'bg-transparent text-muted border-white/8 hover:bg-white/5'
+                        }`}
+                      >
                         {sp.name}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronRight size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-muted" />
+                      </button>
+                    )
+                  })}
                 </div>
-              </div>
-              <Button variant="secondary" onClick={() => setShowAddSp(true)}>
+              )}
+              <Button variant="secondary" fullWidth onClick={() => setShowAddSp(true)}>
                 <UserPlus size={14} />
-                Add More
+                Add Salesperson
               </Button>
             </div>
           </Card>
@@ -846,6 +938,72 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
           </Card>
         </section>
 
+        {/* ── Context Photos ── */}
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs font-semibold text-muted uppercase tracking-widest">
+              Context Photos
+            </h2>
+            <Button size="sm" variant="secondary" onClick={() => contextInputRef.current?.click()}>
+              <Plus size={14} />
+              Add Photo
+            </Button>
+          </div>
+          <input
+            ref={contextInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            multiple
+            className="hidden"
+            onChange={e => addContextPhotos(e.target.files)}
+          />
+          {contextPhotos.length === 0 ? (
+            <Card>
+              <p className="text-sm text-muted text-center py-4">
+                Add photos of damage, surface conditions, or problem areas. Each can have its own
+                description.
+              </p>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {contextPhotos.map(p => (
+                <Card key={p.tempId} padding="sm">
+                  <div className="flex gap-3">
+                    <div className="w-24 h-24 shrink-0 rounded-lg overflow-hidden border border-white/8 bg-surface">
+                      {p.previewUrl || p.url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={p.previewUrl || p.url || ''}
+                          alt="Context"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : null}
+                    </div>
+                    <div className="flex-1 min-w-0 flex flex-col gap-2">
+                      <textarea
+                        value={p.description}
+                        onChange={e => setContextDescription(p.tempId, e.target.value)}
+                        placeholder="Describe what this shows…"
+                        rows={2}
+                        className="w-full px-3 py-2 bg-surface border border-white/8 rounded-xl text-foreground placeholder:text-muted text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors resize-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeContextPhoto(p.tempId)}
+                        className="self-start inline-flex items-center gap-1 text-xs text-muted hover:text-danger transition-colors"
+                      >
+                        <Trash2 size={12} />
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </section>
+
         {/* ── Notes ── */}
         <section>
           <h2 className="text-xs font-semibold text-muted uppercase tracking-widest mb-3">Notes</h2>
@@ -853,6 +1011,20 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
             value={notes}
             onChange={e => setNotes(e.target.value)}
             placeholder="Additional notes…"
+            rows={3}
+            className="w-full px-3.5 py-3 bg-surface border border-white/8 rounded-xl text-foreground placeholder:text-muted text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors resize-none"
+          />
+        </section>
+
+        {/* ── Follow-Up ── */}
+        <section>
+          <h2 className="text-xs font-semibold text-muted uppercase tracking-widest mb-3">
+            Follow-Up
+          </h2>
+          <textarea
+            value={followUpNotes}
+            onChange={e => setFollowUpNotes(e.target.value)}
+            placeholder="What to send or do — e.g. send photos, send product info, quote another address…"
             rows={3}
             className="w-full px-3.5 py-3 bg-surface border border-white/8 rounded-xl text-foreground placeholder:text-muted text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors resize-none"
           />

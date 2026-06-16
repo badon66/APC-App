@@ -44,20 +44,32 @@ type Quote = {
   payment_type_other: string | null
   asphalt_photo_url: string | null
   concrete_photo_url: string | null
+  context_photos: ContextPhoto[] | null
+  follow_up_notes: string | null
   line_items: LineItem[] | null
   job_id: string | null
   created_at: string
 }
 
+type ContextPhoto = { url: string; description: string }
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const STATUS_CYCLE: QuoteStatus[] = ['quoted', 'thinking_about_it', 'sold', 'not_interested']
+const STATUS_CYCLE: QuoteStatus[] = [
+  'quoted',
+  'thinking_about_it',
+  'sold',
+  'not_interested_right_now',
+  'not_interested_at_all',
+]
 
 const STATUS_META: Record<QuoteStatus, { label: string; cls: string }> = {
   quoted: { label: 'Quoted', cls: 'bg-info/15 text-info border-info/30' },
   thinking_about_it: { label: 'Thinking About It', cls: 'bg-warning/15 text-warning border-warning/30' },
   sold: { label: 'Sold', cls: 'bg-accent/15 text-accent border-accent/30' },
-  not_interested: { label: 'Not Interested', cls: 'bg-danger/15 text-danger border-danger/30' },
+  not_interested_right_now: { label: 'Not Interested Right Now', cls: 'bg-white/8 text-muted border-white/15' },
+  not_interested_at_all: { label: 'Not Interested At All', cls: 'bg-danger/15 text-danger border-danger/30' },
+  not_interested: { label: 'Not Interested', cls: 'bg-danger/15 text-danger border-danger/30' }, // legacy rows
 }
 
 const TIER_LABEL: Record<string, string> = { low: 'LOW', mid: 'MID', high: 'HIGH' }
@@ -230,6 +242,18 @@ export default function QuoteDetailPage() {
           </div>
         </Card>
 
+        {/* ── Follow-Up ── */}
+        {quote.follow_up_notes && (
+          <section>
+            <h2 className="text-xs font-semibold text-muted uppercase tracking-widest mb-3">
+              Follow-Up
+            </h2>
+            <div className="px-4 py-3 bg-info/10 border border-info/25 rounded-xl">
+              <p className="text-sm text-foreground whitespace-pre-wrap">{quote.follow_up_notes}</p>
+            </div>
+          </section>
+        )}
+
         {/* ── Services ── */}
         {items.length > 0 && (
           <section>
@@ -301,6 +325,32 @@ export default function QuoteDetailPage() {
             <div className="grid grid-cols-2 gap-3">
               {quote.asphalt_photo_url && <Thumb url={quote.asphalt_photo_url} label="Asphalt" />}
               {quote.concrete_photo_url && <Thumb url={quote.concrete_photo_url} label="Concrete" />}
+            </div>
+          </section>
+        )}
+
+        {/* ── Context Photos ── */}
+        {quote.context_photos && quote.context_photos.length > 0 && (
+          <section>
+            <h2 className="text-xs font-semibold text-muted uppercase tracking-widest mb-3">
+              Context Photos
+            </h2>
+            <div className="space-y-3">
+              {quote.context_photos.map((p, idx) => (
+                <a
+                  key={idx}
+                  href={p.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block rounded-xl overflow-hidden border border-white/8"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={p.url} alt={p.description || 'Context photo'} className="w-full h-48 object-cover" />
+                  {p.description && (
+                    <p className="text-sm text-foreground px-3 py-2 whitespace-pre-wrap">{p.description}</p>
+                  )}
+                </a>
+              ))}
             </div>
           </section>
         )}

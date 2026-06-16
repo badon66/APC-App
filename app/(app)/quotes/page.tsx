@@ -32,8 +32,17 @@ const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: 'quoted', label: 'Quoted' },
   { value: 'thinking_about_it', label: 'Thinking About It' },
   { value: 'sold', label: 'Sold' },
-  { value: 'not_interested', label: 'Not Interested' },
+  { value: 'not_interested_right_now', label: 'Not Interested Right Now' },
+  { value: 'not_interested_at_all', label: 'Not Interested At All' },
 ]
+
+// salesperson is a single text column that may hold multiple comma-joined names.
+function salespersonNames(value: string | null): string[] {
+  return (value ?? '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+}
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -74,7 +83,7 @@ export default function QuotesPage() {
       quotes.filter(
         q =>
           (statusFilter === 'all' || q.status === statusFilter) &&
-          (salespersonFilter === 'all' || q.salesperson === salespersonFilter)
+          (salespersonFilter === 'all' || salespersonNames(q.salesperson).includes(salespersonFilter))
       ),
     [quotes, statusFilter, salespersonFilter]
   )

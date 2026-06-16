@@ -8,7 +8,9 @@ const statusConfig: Record<string, { label: string; color: string }> = {
   quoted: { label: 'Quoted', color: 'blue' },
   thinking_about_it: { label: 'Thinking About It', color: 'amber' },
   sold: { label: 'Sold', color: 'green' },
-  not_interested: { label: 'Not Interested', color: 'red' },
+  not_interested_right_now: { label: 'Not Interested Right Now', color: 'gray' },
+  not_interested_at_all: { label: 'Not Interested At All', color: 'red' },
+  not_interested: { label: 'Not Interested', color: 'red' }, // legacy rows
   no_answer: { label: 'No Answer', color: 'gray' },
   owner_not_home: { label: 'Not Home', color: 'amber' },
   follow_up: { label: 'Follow Up', color: 'blue' },
