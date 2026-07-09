@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { Pencil, Trash2, MapPin, Phone, User, Calendar } from 'lucide-react'
+import { Pencil, Trash2, MapPin, Phone, User, Calendar, Check } from 'lucide-react'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
@@ -45,6 +45,8 @@ type Quote = {
   asphalt_photo_url: string | null
   concrete_photo_url: string | null
   context_photos: ContextPhoto[] | null
+  follow_up_date: string | null
+  follow_up_items: FollowUpItem[] | null
   follow_up_notes: string | null
   line_items: LineItem[] | null
   job_id: string | null
@@ -52,6 +54,7 @@ type Quote = {
 }
 
 type ContextPhoto = { url: string; description: string }
+type FollowUpItem = { label: string; checked: boolean }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -87,6 +90,18 @@ function unitLabel(unit: string): string {
   if (unit === 'lbs') return 'lb'
   if (unit === 'ft') return 'ft'
   return 'sq ft'
+}
+
+function fmtFollowUpDate(s: string): string {
+  // date-only strings parse as UTC midnight; anchor to noon to avoid an off-by-one day
+  const d = new Date(s.length <= 10 ? `${s}T12:00:00` : s)
+  if (Number.isNaN(d.getTime())) return s
+  return d.toLocaleDateString('en-CA', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -243,13 +258,44 @@ export default function QuoteDetailPage() {
         </Card>
 
         {/* ── Follow-Up ── */}
-        {quote.follow_up_notes && (
+        {(quote.follow_up_date ||
+          (quote.follow_up_items && quote.follow_up_items.length > 0) ||
+          quote.follow_up_notes) && (
           <section>
             <h2 className="text-xs font-semibold text-muted uppercase tracking-widest mb-3">
               Follow-Up
             </h2>
-            <div className="px-4 py-3 bg-info/10 border border-info/25 rounded-xl">
-              <p className="text-sm text-foreground whitespace-pre-wrap">{quote.follow_up_notes}</p>
+            <div className="px-4 py-3 bg-info/10 border border-info/25 rounded-xl space-y-3">
+              {quote.follow_up_date && (
+                <div className="flex items-center gap-2.5 text-sm text-foreground">
+                  <Calendar size={15} className="text-info shrink-0" />
+                  <span className="font-medium">Follow up on {fmtFollowUpDate(quote.follow_up_date)}</span>
+                </div>
+              )}
+              {quote.follow_up_items && quote.follow_up_items.length > 0 && (
+                <div className="space-y-1.5">
+                  {quote.follow_up_items.map((it, idx) => (
+                    <div key={idx} className="flex items-center gap-2.5 text-sm">
+                      <span
+                        className={`w-4 h-4 shrink-0 rounded border flex items-center justify-center ${
+                          it.checked
+                            ? 'bg-accent border-accent text-white'
+                            : 'bg-transparent border-white/25 text-transparent'
+                        }`}
+                      >
+                        <Check size={11} strokeWidth={3} />
+                      </span>
+                      <span className={it.checked ? 'text-foreground' : 'text-muted line-through'}>
+                        {it.label}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Legacy free-text follow-up (older quotes) */}
+              {quote.follow_up_notes && (
+                <p className="text-sm text-foreground whitespace-pre-wrap">{quote.follow_up_notes}</p>
+              )}
             </div>
           </section>
         )}

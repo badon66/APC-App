@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Trash2, Plus, ChevronRight, UserPlus } from 'lucide-react'
+import { Trash2, Plus, ChevronRight, UserPlus, Check } from 'lucide-react'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
@@ -10,6 +10,7 @@ import Input from '@/components/ui/Input'
 import Modal from '@/components/ui/Modal'
 import LocationButton from '@/components/ui/LocationButton'
 import PhotoUpload from '@/components/ui/PhotoUpload'
+import VoiceQuoteFill, { type VoiceFillResult } from './VoiceQuoteFill'
 import { supabase } from '@/lib/supabase'
 import { BUSINESS_ID } from '@/lib/config'
 import type { Tier, QuoteStatus, SurfaceType } from '@/lib/config'
@@ -49,6 +50,36 @@ type ContextPhoto = {
   description: string
 }
 
+type FollowUpItem = {
+  tempId: string
+  label: string
+  checked: boolean
+  custom: boolean
+}
+
+// Shape of the locally-saved (localStorage) draft for an in-progress new quote.
+// Files (photos) are intentionally omitted — they can't be serialized to localStorage.
+type DraftData = {
+  selectedSalespersons: string[]
+  customerName: string
+  address: string
+  phone: string
+  quoteDate: string
+  quoteType: SurfaceType
+  items: QuoteItem[]
+  subtotal: string
+  discount: string
+  tax: string
+  taxManual: boolean
+  soldPrice: string
+  paymentType: string
+  paymentOther: string
+  status: QuoteStatus
+  notes: string
+  followUpDate: string
+  followUpItems: FollowUpItem[]
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const QUOTE_TYPES: { value: SurfaceType; label: string }[] = [
@@ -75,6 +106,10 @@ const STATUS_META: Record<QuoteStatus, { label: string; cls: string }> = {
 }
 
 const PAYMENT_TYPES = ['Card', 'Cash', 'E-Transfer', 'Check', 'Other']
+
+const DEFAULT_FOLLOWUP_LABELS = ['Product Information', 'Past Photos of Jobs', 'Past Addresses']
+
+const DRAFT_KEY = 'fieldbase:quote-draft'
 
 const TIER_CYCLE: Tier[] = ['low', 'mid', 'high']
 
@@ -132,6 +167,51 @@ function todayLocal(): string {
   return new Date(d.getTime() - off * 60000).toISOString().slice(0, 10)
 }
 
+function defaultFollowUpItems(): FollowUpItem[] {
+  return DEFAULT_FOLLOWUP_LABELS.map(label => ({
+    tempId: crypto.randomUUID(),
+    label,
+    checked: false,
+    custom: false,
+  }))
+}
+
+// Merge stored follow-up items (label + checked) back onto the predefined set,
+// preserving checked state and re-adding any custom ("Other") items.
+function buildFollowUpItems(stored: unknown): FollowUpItem[] {
+  const items = defaultFollowUpItems()
+  if (Array.isArray(stored)) {
+    for (const raw of stored) {
+      const r = raw as Record<string, unknown>
+      const label = String(r.label ?? '').trim()
+      if (!label) continue
+      const checked = !!r.checked
+      const match = items.find(i => !i.custom && i.label === label)
+      if (match) match.checked = checked
+      else items.push({ tempId: crypto.randomUUID(), label, checked, custom: true })
+    }
+  }
+  return items
+}
+
+// Whether a restored draft holds anything worth offering to resume.
+function draftHasContent(d: DraftData): boolean {
+  return Boolean(
+    d.customerName?.trim() ||
+      d.address?.trim() ||
+      d.phone?.trim() ||
+      d.items?.length ||
+      d.subtotal ||
+      d.discount ||
+      d.soldPrice ||
+      d.notes?.trim() ||
+      d.followUpDate ||
+      d.selectedSalespersons?.length ||
+      d.paymentType ||
+      d.followUpItems?.some(i => i.checked || (i.custom && i.label.trim()))
+  )
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface QuoteBuilderProps {
@@ -185,9 +265,10 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
   const [contextPhotos, setContextPhotos] = useState<ContextPhoto[]>([])
   const contextInputRef = useRef<HTMLInputElement>(null)
 
-  // Notes
+  // Notes + follow-up
   const [notes, setNotes] = useState('')
-  const [followUpNotes, setFollowUpNotes] = useState('')
+  const [followUpDate, setFollowUpDate] = useState('')
+  const [followUpItems, setFollowUpItems] = useState<FollowUpItem[]>(defaultFollowUpItems)
 
   // UI state
   const [loading, setLoading] = useState(isEdit)
@@ -195,6 +276,11 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
   const [existingJobId, setExistingJobId] = useState<string | null>(null)
   const [nameError, setNameError] = useState('')
   const [saveError, setSaveError] = useState('')
+
+  // Draft auto-save (new quotes only)
+  const [showResumePrompt, setShowResumePrompt] = useState(false)
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(false)
+  const pendingDraftRef = useRef<DraftData | null>(null)
 
   // ─── Derived totals ───────────────────────────────────────────────────────────
 
@@ -219,9 +305,83 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
   useEffect(() => {
     loadSalespersons()
     loadServices()
-    if (isEdit) loadQuote()
+    if (isEdit) {
+      loadQuote()
+      return
+    }
+    // New quote: offer to resume a locally-saved draft if one exists.
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY)
+      if (raw) {
+        const draft = JSON.parse(raw) as DraftData
+        if (draftHasContent(draft)) {
+          pendingDraftRef.current = draft
+          setShowResumePrompt(true)
+          return
+        }
+      }
+    } catch {
+      // ignore a malformed draft
+    }
+    try {
+      localStorage.removeItem(DRAFT_KEY)
+    } catch {
+      // ignore
+    }
+    setAutoSaveEnabled(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Continuously persist the in-progress new quote to localStorage so nothing is lost.
+  useEffect(() => {
+    if (isEdit || !autoSaveEnabled) return
+    const draft: DraftData = {
+      selectedSalespersons,
+      customerName,
+      address,
+      phone,
+      quoteDate,
+      quoteType,
+      items,
+      subtotal,
+      discount,
+      tax,
+      taxManual,
+      soldPrice,
+      paymentType,
+      paymentOther,
+      status,
+      notes,
+      followUpDate,
+      followUpItems,
+    }
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+    } catch {
+      // storage unavailable / full — ignore
+    }
+  }, [
+    isEdit,
+    autoSaveEnabled,
+    selectedSalespersons,
+    customerName,
+    address,
+    phone,
+    quoteDate,
+    quoteType,
+    items,
+    subtotal,
+    discount,
+    tax,
+    taxManual,
+    soldPrice,
+    paymentType,
+    paymentOther,
+    status,
+    notes,
+    followUpDate,
+    followUpItems,
+  ])
 
   async function loadSalespersons() {
     const { data } = await supabase
@@ -248,7 +408,7 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     const { data: q } = await supabase
       .from('quotes')
       .select(
-        'salesperson, customer_name, customer_phone, address, quote_type, status, notes, follow_up_notes, actual_price, discount, tax, sold_price, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at'
+        'salesperson, customer_name, customer_phone, address, quote_type, status, notes, follow_up_date, follow_up_items, actual_price, discount, tax, sold_price, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at'
       )
       .eq('id', quoteId)
       .single()
@@ -270,7 +430,8 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     setQuoteType((q.quote_type as SurfaceType) ?? 'asphalt')
     setStatus((q.status as QuoteStatus) ?? 'quoted')
     setNotes(q.notes ?? '')
-    setFollowUpNotes(q.follow_up_notes ?? '')
+    setFollowUpDate(q.follow_up_date ? String(q.follow_up_date).slice(0, 10) : '')
+    setFollowUpItems(buildFollowUpItems(q.follow_up_items))
     setSubtotal(q.actual_price != null ? String(q.actual_price) : '')
     setDiscount(q.discount != null ? String(q.discount) : '')
     if (q.tax != null) {
@@ -378,6 +539,43 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     setItems(prev => prev.map(i => (i.tempId === tempId ? { ...i, tier: nextTier(i.tier) } : i)))
   }
 
+  // ─── Voice fill ───────────────────────────────────────────────────────────────
+
+  // Applies a user-confirmed voice-fill result. Only fills what the AI extracted;
+  // everything stays editable and tiers keep the normal default ('mid').
+  function applyVoiceFill(r: VoiceFillResult) {
+    if (r.customerName) {
+      setCustomerName(r.customerName)
+      setNameError('')
+    }
+    if (r.address) setAddress(r.address)
+    if (r.phone) setPhone(r.phone)
+    const effectiveType = r.quoteType ?? quoteType
+    if (r.quoteType) changeQuoteType(r.quoteType)
+    const additions: QuoteItem[] = []
+    for (const item of r.items) {
+      const svc = services.find(s => s.id === item.serviceRateId)
+      if (!svc || !matchesType(svc.category, effectiveType)) continue
+      additions.push({
+        tempId: crypto.randomUUID(),
+        serviceRateId: svc.id,
+        serviceName: svc.service_name,
+        unit: svc.unit,
+        category: svc.category,
+        rateLow: svc.rate_low,
+        rateMid: svc.rate_mid,
+        rateHigh: svc.rate_high,
+        tier: 'mid',
+        quantity: String(item.quantity),
+      })
+    }
+    if (additions.length) setItems(prev => [...prev, ...additions])
+    if (r.notes) {
+      const extra = r.notes
+      setNotes(prev => (prev.trim() ? `${prev}\n${extra}` : extra))
+    }
+  }
+
   // ─── Context photo handlers ─────────────────────────────────────────────────────
 
   function addContextPhotos(files: FileList | null) {
@@ -399,6 +597,70 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
 
   function removeContextPhoto(tempId: string) {
     setContextPhotos(prev => prev.filter(p => p.tempId !== tempId))
+  }
+
+  // ─── Follow-up handlers ─────────────────────────────────────────────────────────
+
+  function toggleFollowUpItem(tempId: string) {
+    setFollowUpItems(prev => prev.map(i => (i.tempId === tempId ? { ...i, checked: !i.checked } : i)))
+  }
+
+  function setFollowUpLabel(tempId: string, label: string) {
+    setFollowUpItems(prev => prev.map(i => (i.tempId === tempId ? { ...i, label } : i)))
+  }
+
+  function addCustomFollowUpItem() {
+    setFollowUpItems(prev => [
+      ...prev,
+      { tempId: crypto.randomUUID(), label: '', checked: true, custom: true },
+    ])
+  }
+
+  function removeFollowUpItem(tempId: string) {
+    setFollowUpItems(prev => prev.filter(i => i.tempId !== tempId))
+  }
+
+  // ─── Draft handlers ─────────────────────────────────────────────────────────────
+
+  function applyDraft(d: DraftData) {
+    setSelectedSalespersons(d.selectedSalespersons ?? [])
+    setCustomerName(d.customerName ?? '')
+    setAddress(d.address ?? '')
+    setPhone(d.phone ?? '')
+    setQuoteDate(d.quoteDate || todayLocal())
+    setQuoteType(d.quoteType ?? 'asphalt')
+    setItems(Array.isArray(d.items) ? d.items : [])
+    setSubtotal(d.subtotal ?? '')
+    setDiscount(d.discount ?? '')
+    setTax(d.tax ?? '')
+    setTaxManual(!!d.taxManual)
+    setSoldPrice(d.soldPrice ?? '')
+    setPaymentType(d.paymentType ?? '')
+    setPaymentOther(d.paymentOther ?? '')
+    setStatus(d.status ?? 'quoted')
+    setNotes(d.notes ?? '')
+    setFollowUpDate(d.followUpDate ?? '')
+    setFollowUpItems(
+      Array.isArray(d.followUpItems) && d.followUpItems.length ? d.followUpItems : defaultFollowUpItems()
+    )
+  }
+
+  function resumeDraft() {
+    if (pendingDraftRef.current) applyDraft(pendingDraftRef.current)
+    pendingDraftRef.current = null
+    setShowResumePrompt(false)
+    setAutoSaveEnabled(true)
+  }
+
+  function startFresh() {
+    pendingDraftRef.current = null
+    try {
+      localStorage.removeItem(DRAFT_KEY)
+    } catch {
+      // ignore
+    }
+    setShowResumePrompt(false)
+    setAutoSaveEnabled(true)
   }
 
   // ─── Save ─────────────────────────────────────────────────────────────────────
@@ -466,7 +728,11 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       quote_type: quoteType,
       status,
       notes: notes.trim() || null,
-      follow_up_notes: followUpNotes.trim() || null,
+      follow_up_date: followUpDate || null,
+      follow_up_items: followUpItems
+        .filter(i => i.label.trim())
+        .map(i => ({ label: i.label.trim(), checked: i.checked })),
+      follow_up_notes: null,
       suggested_total: suggested,
       suggested_lowest_total: suggestedLowest,
       actual_price: subtotal === '' ? null : num(subtotal),
@@ -504,6 +770,16 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     // When sold, create a linked job (once)
     if (status === 'sold' && savedId && !existingJobId) {
       await createLinkedJob(savedId)
+    }
+
+    // Quote is now committed to the database — clear the local draft so it doesn't linger.
+    if (!isEdit) {
+      setAutoSaveEnabled(false)
+      try {
+        localStorage.removeItem(DRAFT_KEY)
+      } catch {
+        // ignore
+      }
     }
 
     setSaving(false)
@@ -648,6 +924,13 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       <PageHeader title={isEdit ? 'Edit Quote' : 'New Quote'} backHref="/quotes" />
 
       <div className="p-4 space-y-6 pb-40">
+
+        {/* ── Voice fill (new quotes only) ── */}
+        {!isEdit && (
+          <section>
+            <VoiceQuoteFill services={services} onApply={applyVoiceFill} />
+          </section>
+        )}
 
         {/* ── Salesperson ── */}
         <section>
@@ -1021,13 +1304,59 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
           <h2 className="text-xs font-semibold text-muted uppercase tracking-widest mb-3">
             Follow-Up
           </h2>
-          <textarea
-            value={followUpNotes}
-            onChange={e => setFollowUpNotes(e.target.value)}
-            placeholder="What to send or do — e.g. send photos, send product info, quote another address…"
-            rows={3}
-            className="w-full px-3.5 py-3 bg-surface border border-white/8 rounded-xl text-foreground placeholder:text-muted text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors resize-none"
-          />
+          <Card>
+            <div className="space-y-4">
+              <Input
+                label="Follow-Up Date"
+                type="date"
+                value={followUpDate}
+                onChange={e => setFollowUpDate(e.target.value)}
+              />
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Follow up with</p>
+                {followUpItems.map(it => (
+                  <div key={it.tempId} className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => toggleFollowUpItem(it.tempId)}
+                      aria-label={it.checked ? 'Uncheck' : 'Check'}
+                      className={`w-5 h-5 shrink-0 rounded-md border flex items-center justify-center transition-colors active:scale-95 ${
+                        it.checked
+                          ? 'bg-accent border-accent text-white'
+                          : 'bg-transparent border-white/20 text-transparent'
+                      }`}
+                    >
+                      <Check size={13} strokeWidth={3} />
+                    </button>
+                    {it.custom ? (
+                      <input
+                        value={it.label}
+                        onChange={e => setFollowUpLabel(it.tempId, e.target.value)}
+                        placeholder="Custom follow-up item…"
+                        className="flex-1 h-9 px-3 bg-surface border border-white/8 rounded-lg text-foreground placeholder:text-muted text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors"
+                      />
+                    ) : (
+                      <span className="flex-1 text-sm text-foreground">{it.label}</span>
+                    )}
+                    {it.custom && (
+                      <button
+                        type="button"
+                        onClick={() => removeFollowUpItem(it.tempId)}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg text-muted hover:text-danger hover:bg-danger/10 transition-colors shrink-0"
+                        aria-label="Remove item"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <Button size="sm" variant="secondary" onClick={addCustomFollowUpItem}>
+                  <Plus size={14} />
+                  Add Other
+                </Button>
+              </div>
+            </div>
+          </Card>
         </section>
 
         {saveError && <p className="text-sm text-danger text-center">{saveError}</p>}
@@ -1081,6 +1410,23 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
           <Button fullWidth onClick={addSalesperson} loading={savingSp}>
             Add Salesperson
           </Button>
+        </div>
+      </Modal>
+
+      {/* ── Resume draft prompt (no title → can only be dismissed by choosing) ── */}
+      <Modal open={showResumePrompt} onClose={() => {}}>
+        <div className="space-y-4">
+          <h2 className="text-base font-semibold text-foreground">Resume your saved draft?</h2>
+          <p className="text-sm text-muted">
+            You have an unsaved quote draft on this device. Resume where you left off, or start
+            fresh.
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="secondary" onClick={startFresh}>
+              Start Fresh
+            </Button>
+            <Button onClick={resumeDraft}>Resume</Button>
+          </div>
         </div>
       </Modal>
     </div>
