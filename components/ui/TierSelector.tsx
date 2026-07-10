@@ -17,12 +17,14 @@ const tierColors: Record<Tier, string> = {
   low: 'bg-info/15 text-info border-info/30',
   mid: 'bg-warning/15 text-warning border-warning/30',
   high: 'bg-accent/15 text-accent border-accent/30',
+  custom: 'bg-white/10 text-foreground border-white/25',
 }
 
 const tierLabels: Record<Tier, string> = {
   low: 'LOW',
   mid: 'MID',
   high: 'HIGH',
+  custom: 'CUSTOM',
 }
 
 function formatRate(rate: number, unit: string): string {

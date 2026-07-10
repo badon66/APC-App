@@ -17,4 +17,4 @@ export const SURFACE_TYPES = ['asphalt', 'concrete', 'both'] as const
 export type QuoteStatus = typeof QUOTE_STATUSES[number] | 'not_interested'
 export type ProspectStatus = typeof PROSPECT_STATUSES[number]
 export type SurfaceType = typeof SURFACE_TYPES[number]
-export type Tier = 'low' | 'mid' | 'high'
+export type Tier = 'low' | 'mid' | 'high' | 'custom'

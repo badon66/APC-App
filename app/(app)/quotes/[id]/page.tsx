@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { Pencil, Trash2, MapPin, Phone, User, Calendar, Check } from 'lucide-react'
+import { Pencil, Trash2, MapPin, Phone, User, Calendar, Check, Share2 } from 'lucide-react'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
@@ -75,7 +75,7 @@ const STATUS_META: Record<QuoteStatus, { label: string; cls: string }> = {
   not_interested: { label: 'Not Interested', cls: 'bg-danger/15 text-danger border-danger/30' }, // legacy rows
 }
 
-const TIER_LABEL: Record<string, string> = { low: 'LOW', mid: 'MID', high: 'HIGH' }
+const TIER_LABEL: Record<string, string> = { low: 'LOW', mid: 'MID', high: 'HIGH', custom: 'CUSTOM' }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -115,6 +115,7 @@ export default function QuoteDetailPage() {
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [linkCopied, setLinkCopied] = useState(false)
 
   useEffect(() => {
     loadQuote()
@@ -171,6 +172,29 @@ export default function QuoteDetailPage() {
     setUpdatingStatus(false)
   }
 
+  // Share a public, read-only link to this quote. Native share sheet on
+  // phones; clipboard copy with feedback elsewhere.
+  async function shareQuote() {
+    if (!quote) return
+    const url = `${window.location.origin}/share/${quote.id}`
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: `Quote — ${quote.customer_name}`, url })
+        return
+      } catch {
+        // user dismissed the share sheet, or it failed — fall through to copy
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url)
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 2000)
+    } catch {
+      // clipboard unavailable — show the URL so it can be copied manually
+      window.prompt('Copy this link:', url)
+    }
+  }
+
   async function deleteQuote() {
     if (!quote) return
     setDeleting(true)
@@ -200,10 +224,16 @@ export default function QuoteDetailPage() {
         title={quote.customer_name}
         backHref="/quotes"
         rightElement={
-          <Button size="sm" variant="secondary" onClick={() => router.push(`/quotes/${quote.id}/edit`)}>
-            <Pencil size={14} />
-            Edit
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={shareQuote}>
+              <Share2 size={14} />
+              {linkCopied ? 'Copied!' : 'Share'}
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => router.push(`/quotes/${quote.id}/edit`)}>
+              <Pencil size={14} />
+              Edit
+            </Button>
+          </div>
         }
       />
 

@@ -38,6 +38,7 @@ type QuoteItem = {
   rateHigh: number
   tier: Tier
   quantity: string
+  customRate: string
 }
 
 type Salesperson = { id: string; name: string }
@@ -111,23 +112,27 @@ const DEFAULT_FOLLOWUP_LABELS = ['Product Information', 'Past Photos of Jobs', '
 
 const DRAFT_KEY = 'fieldbase:quote-draft'
 
-const TIER_CYCLE: Tier[] = ['low', 'mid', 'high']
+const TIER_CYCLE: Tier[] = ['low', 'mid', 'high', 'custom']
 
 const TIER_META: Record<Tier, { label: string; cls: string }> = {
   low: { label: 'LOW', cls: 'bg-info/15 text-info border-info/30' },
   mid: { label: 'MID', cls: 'bg-warning/15 text-warning border-warning/30' },
   high: { label: 'HIGH', cls: 'bg-accent/15 text-accent border-accent/30' },
+  custom: { label: 'CUSTOM', cls: 'bg-white/10 text-foreground border-white/25' },
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function rateFor(item: QuoteItem, tier: Tier): number {
+  if (tier === 'custom') return num(item.customRate)
   if (tier === 'low') return item.rateLow
   if (tier === 'high') return item.rateHigh
   return item.rateMid
 }
 
+// A custom rate has no "one tier lower" — the entered price is used as-is.
 function lowerTier(tier: Tier): Tier {
+  if (tier === 'custom') return 'custom'
   if (tier === 'high') return 'mid'
   if (tier === 'mid') return 'low'
   return 'low'
@@ -138,9 +143,13 @@ function nextTier(tier: Tier): Tier {
 }
 
 function fmtRate(rate: number, unit: string): string {
-  if (unit === 'lbs') return `$${rate.toFixed(2)}/lb`
-  if (unit === 'ft') return `$${rate.toFixed(2)}/ft`
-  return `$${rate.toFixed(2)}/sq ft`
+  return `$${rate.toFixed(2)}/${unitShort(unit)}`
+}
+
+function unitShort(unit: string): string {
+  if (unit === 'lbs') return 'lb'
+  if (unit === 'ft') return 'ft'
+  return 'sq ft'
 }
 
 function fmtMoney(n: number): string {
@@ -469,6 +478,7 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
             rateHigh: Number(i.rateHigh ?? 0),
             tier: (i.tier as Tier) ?? 'mid',
             quantity: i.quantity != null ? String(i.quantity) : '',
+            customRate: i.customRate != null ? String(i.customRate) : '',
           }))
         : []
     )
@@ -522,6 +532,7 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
         rateHigh: svc.rate_high,
         tier: 'mid',
         quantity: '',
+        customRate: '',
       },
     ])
     setShowPicker(false)
@@ -533,6 +544,10 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
 
   function setQty(tempId: string, qty: string) {
     setItems(prev => prev.map(i => (i.tempId === tempId ? { ...i, quantity: qty } : i)))
+  }
+
+  function setCustomRate(tempId: string, rate: string) {
+    setItems(prev => prev.map(i => (i.tempId === tempId ? { ...i, customRate: rate } : i)))
   }
 
   function cycleItemTier(tempId: string) {
@@ -567,6 +582,7 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
         rateHigh: svc.rate_high,
         tier: 'mid',
         quantity: String(item.quantity),
+        customRate: '',
       })
     }
     if (additions.length) setItems(prev => [...prev, ...additions])
@@ -629,7 +645,8 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     setPhone(d.phone ?? '')
     setQuoteDate(d.quoteDate || todayLocal())
     setQuoteType(d.quoteType ?? 'asphalt')
-    setItems(Array.isArray(d.items) ? d.items : [])
+    // Older saved drafts predate customRate — default it so inputs stay controlled.
+    setItems(Array.isArray(d.items) ? d.items.map(i => ({ ...i, customRate: i.customRate ?? '' })) : [])
     setSubtotal(d.subtotal ?? '')
     setDiscount(d.discount ?? '')
     setTax(d.tax ?? '')
@@ -716,6 +733,7 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       rateHigh: i.rateHigh,
       tier: i.tier,
       quantity: num(i.quantity),
+      customRate: i.tier === 'custom' ? num(i.customRate) : null,
       lineTotal: num(i.quantity) * rateFor(i, i.tier),
     }))
 
@@ -856,6 +874,24 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
                 </span>
               </button>
             </div>
+            {item.tier === 'custom' && (
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-xs text-muted whitespace-nowrap">Custom rate $</span>
+                <Input
+                  type="number"
+                  min="0"
+                  step="any"
+                  placeholder="0.00"
+                  value={item.customRate}
+                  onChange={e => setCustomRate(item.tempId, e.target.value)}
+                  rightElement={
+                    <span className="text-xs text-muted whitespace-nowrap">
+                      per {unitShort(item.unit)}
+                    </span>
+                  }
+                />
+              </div>
+            )}
           </div>
           <button
             type="button"
