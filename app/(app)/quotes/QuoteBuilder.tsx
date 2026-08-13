@@ -551,7 +551,17 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
   }
 
   function cycleItemTier(tempId: string) {
-    setItems(prev => prev.map(i => (i.tempId === tempId ? { ...i, tier: nextTier(i.tier) } : i)))
+    setItems(prev =>
+      prev.map(i => {
+        if (i.tempId !== tempId) return i
+        const tier = nextTier(i.tier)
+        // Entering custom with no rate yet: start from the rate they were on,
+        // so the line price doesn't drop to $0 mid-cycle.
+        const customRate =
+          tier === 'custom' && !i.customRate.trim() ? String(rateFor(i, i.tier)) : i.customRate
+        return { ...i, tier, customRate }
+      })
+    )
   }
 
   // ─── Voice fill ───────────────────────────────────────────────────────────────

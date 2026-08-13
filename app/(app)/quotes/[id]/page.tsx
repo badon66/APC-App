@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { Pencil, Trash2, MapPin, Phone, User, Calendar, Check, Share2 } from 'lucide-react'
+import { Pencil, Trash2, MapPin, Phone, User, Calendar, Check, Share2, PenLine } from 'lucide-react'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
@@ -51,6 +51,13 @@ type Quote = {
   line_items: LineItem[] | null
   job_id: string | null
   created_at: string
+  signature_url: string | null
+  signed_name: string | null
+  signed_phone: string | null
+  signed_email: string | null
+  signed_at: string | null
+  terms_agreed: boolean | null
+  terms_agreed_at: string | null
 }
 
 type ContextPhoto = { url: string; description: string }
@@ -248,6 +255,63 @@ export default function QuoteDetailPage() {
         >
           {STATUS_META[quote.status].label}
         </button>
+
+        {/* ── Close Deal / Signed ── */}
+        {quote.signature_url ? (
+          <section>
+            <h2 className="text-xs font-semibold text-muted uppercase tracking-widest mb-3">
+              Signed
+            </h2>
+            <Card>
+              <div className="space-y-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={quote.signature_url}
+                  alt="Signature"
+                  className="w-full h-28 object-contain rounded-xl bg-white"
+                />
+                <div className="text-sm text-foreground space-y-1">
+                  {quote.signed_name && <p className="font-medium">{quote.signed_name}</p>}
+                  {quote.signed_at && (
+                    <p className="text-muted">
+                      Signed on{' '}
+                      {new Date(quote.signed_at).toLocaleDateString('en-CA', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                    </p>
+                  )}
+                  {(quote.signed_email || quote.signed_phone) && (
+                    <p className="text-muted">
+                      {[quote.signed_email, quote.signed_phone].filter(Boolean).join(' · ')}
+                    </p>
+                  )}
+                  {quote.terms_agreed && (
+                    <p className="text-xs text-muted inline-flex items-center gap-1.5">
+                      <Check size={12} className="text-accent" />
+                      Terms &amp; conditions agreed
+                      {quote.terms_agreed_at
+                        ? ` — ${new Date(quote.terms_agreed_at).toLocaleString('en-CA', {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })}`
+                        : ''}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </Card>
+          </section>
+        ) : (
+          <Button fullWidth onClick={() => router.push(`/quotes/${quote.id}/close`)}>
+            <PenLine size={15} />
+            Close Deal
+          </Button>
+        )}
 
         {/* ── Customer ── */}
         <Card>

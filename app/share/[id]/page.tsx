@@ -75,7 +75,7 @@ export default async function SharedQuotePage({ params }: { params: Promise<{ id
   const { data: quote } = await supabase
     .from('quotes')
     .select(
-      'id, customer_name, customer_phone, address, status, notes, actual_price, discount, final_quote, tax, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at'
+      'id, customer_name, customer_phone, address, status, notes, actual_price, discount, final_quote, tax, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at, deposit_required, deposit_percent, deposit_amount'
     )
     .eq('id', id)
     .single()
@@ -198,6 +198,35 @@ export default async function SharedQuotePage({ params }: { params: Promise<{ id
               {fmtMoney(balanceDue)}
             </span>
           </div>
+          {/* Deposit — only shown once a deposit decision has been recorded at signing. */}
+          {quote.deposit_required != null && (
+            <div className="mt-4 rounded-2xl border border-white/10 px-5 py-4">
+              {quote.deposit_required ? (
+                <>
+                  <div className="flex items-baseline justify-between gap-4">
+                    <span className="text-sm font-semibold text-foreground">
+                      Deposit Due
+                      {quote.deposit_percent != null && (
+                        <span className="font-normal text-muted"> ({quote.deposit_percent}%)</span>
+                      )}
+                    </span>
+                    <span className="text-xl font-bold tabular-nums text-foreground">
+                      {fmtMoney(quote.deposit_amount)}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted">
+                    Required before work begins. Non-refundable once paid. The remaining balance is
+                    due upon completion.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-foreground">
+                  No deposit required{' '}
+                  <span className="text-muted">— full balance due upon completion.</span>
+                </p>
+              )}
+            </div>
+          )}
           {paymentLabel && (
             <p className="mt-4 text-sm text-muted">
               Payment type: <span className="font-medium text-foreground">{paymentLabel}</span>
