@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { Pencil, Trash2, MapPin, Phone, User, Calendar, Check, Share2, PenLine } from 'lucide-react'
+import { Pencil, Trash2, MapPin, Phone, User, Calendar, Check, Share2, PenLine, FileText } from 'lucide-react'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
@@ -303,6 +303,14 @@ export default function QuoteDetailPage() {
                     </p>
                   )}
                 </div>
+                <Button
+                  fullWidth
+                  variant="secondary"
+                  onClick={() => router.push(`/quotes/${quote.id}/close`)}
+                >
+                  <FileText size={14} />
+                  View Signed Agreement
+                </Button>
               </div>
             </Card>
           </section>

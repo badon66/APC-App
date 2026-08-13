@@ -75,7 +75,7 @@ export default async function SharedQuotePage({ params }: { params: Promise<{ id
   const { data: quote } = await supabase
     .from('quotes')
     .select(
-      'id, customer_name, customer_phone, address, status, notes, actual_price, discount, final_quote, tax, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at, deposit_required, deposit_percent, deposit_amount'
+      'id, customer_name, customer_phone, address, status, notes, actual_price, discount, final_quote, tax, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at, deposit_required, deposit_percent, deposit_amount, signature_url'
     )
     .eq('id', id)
     .single()
@@ -99,6 +99,9 @@ export default async function SharedQuotePage({ params }: { params: Promise<{ id
   const cardPhotos = [quote.asphalt_photo_url, quote.concrete_photo_url].filter(
     (u): u is string => !!u
   )
+  // A saved signature is what makes a deal closed — a signed quote can only be
+  // viewed, never resigned.
+  const isSigned = !!quote.signature_url
   const balanceDue = (quote.final_quote ?? 0) + (quote.tax ?? 0)
   const paymentLabel =
     quote.payment_type === 'Other'
@@ -123,6 +126,18 @@ export default async function SharedQuotePage({ params }: { params: Promise<{ id
             </p>
           </div>
         </header>
+
+        {/* ── Sign / view agreement ── */}
+        <a
+          href={`/share/${quote.id}/sign`}
+          className={`mt-8 flex w-full items-center justify-center gap-2 rounded-2xl px-6 py-4 text-base font-semibold transition-colors ${
+            isSigned
+              ? 'border border-white/15 bg-white/5 text-foreground hover:bg-white/10'
+              : 'bg-accent text-white hover:bg-accent-hover'
+          }`}
+        >
+          {isSigned ? 'View Signed Agreement' : 'Review and Sign the Contract'}
+        </a>
 
         <div className="my-8 border-t border-white/10" />
 
