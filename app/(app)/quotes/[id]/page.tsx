@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { Pencil, Trash2, MapPin, Phone, User, Calendar, Check, Share2, PenLine, FileText } from 'lucide-react'
+import { Pencil, Trash2, MapPin, Phone, User, Calendar, Check, Share2, PenLine, FileText, Download } from 'lucide-react'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
@@ -58,6 +58,10 @@ type Quote = {
   signed_at: string | null
   terms_agreed: boolean | null
   terms_agreed_at: string | null
+  signed_pdf_url: string | null
+  deposit_required: boolean | null
+  deposit_percent: number | null
+  deposit_amount: number | null
 }
 
 type ContextPhoto = { url: string; description: string }
@@ -303,14 +307,27 @@ export default function QuoteDetailPage() {
                     </p>
                   )}
                 </div>
-                <Button
-                  fullWidth
-                  variant="secondary"
-                  onClick={() => router.push(`/quotes/${quote.id}/close`)}
-                >
-                  <FileText size={14} />
-                  View Signed Agreement
-                </Button>
+                <div className="space-y-2">
+                  <Button
+                    fullWidth
+                    variant="secondary"
+                    onClick={() => router.push(`/quotes/${quote.id}/close`)}
+                  >
+                    <FileText size={14} />
+                    View Signed Agreement
+                  </Button>
+                  {quote.signed_pdf_url && (
+                    <a
+                      href={quote.signed_pdf_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-medium text-foreground hover:bg-white/10 transition-colors"
+                    >
+                      <Download size={14} />
+                      Signed Agreement PDF
+                    </a>
+                  )}
+                </div>
               </div>
             </Card>
           </section>
@@ -444,6 +461,24 @@ export default function QuoteDetailPage() {
                 <span className="text-sm font-semibold text-foreground">Balance Due</span>
                 <span className="text-2xl font-bold text-accent">{fmtMoney(balanceDue)}</span>
               </div>
+              {/* Deposit is set on the quote form — shown here for reference only. */}
+              {quote.deposit_required != null && (
+                <>
+                  <div className="border-t border-white/8" />
+                  {quote.deposit_required ? (
+                    <Row
+                      label={`Deposit${quote.deposit_percent != null ? ` (${quote.deposit_percent}%)` : ''}`}
+                      value={fmtMoney(quote.deposit_amount)}
+                      bold
+                    />
+                  ) : (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted">Deposit</span>
+                      <span className="text-sm font-semibold text-foreground">Not needed</span>
+                    </div>
+                  )}
+                </>
+              )}
               {quote.sold_price != null && (
                 <>
                   <div className="border-t border-white/8" />

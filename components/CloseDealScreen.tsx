@@ -79,6 +79,24 @@ function unitLabel(unit: string): string {
   return 'sq ft'
 }
 
+// The per-unit price actually used for a line (mirrors the share page).
+function rateUsed(item: LineItem): number | null {
+  const byTier =
+    item.tier === 'custom'
+      ? item.customRate ?? undefined
+      : item.tier === 'low'
+        ? item.rateLow
+        : item.tier === 'high'
+          ? item.rateHigh
+          : item.rateMid
+  if (typeof byTier === 'number' && Number.isFinite(byTier)) return byTier
+  const total = item.lineTotal
+  if (item.quantity > 0 && typeof total === 'number' && Number.isFinite(total)) {
+    return total / item.quantity
+  }
+  return null
+}
+
 function fmtDateTime(s: string): string {
   const d = new Date(s)
   if (Number.isNaN(d.getTime())) return s
@@ -111,10 +129,6 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
-
-  // Deposit — defaults to the 25% described in the terms (section 8)
-  const [depositRequired, setDepositRequired] = useState(false)
-  const [depositPercent, setDepositPercent] = useState('25')
 
   // Terms agreement — must be ticked before the signature area unlocks
   const [agreed, setAgreed] = useState(false)
@@ -226,17 +240,14 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
 
   // ─── Sign & close ───────────────────────────────────────────────────────────
 
-  // Deposit is a percentage of the balance due (final quote + tax).
   const balanceDueValue = (quote?.final_quote ?? 0) + (quote?.tax ?? 0)
-  const depositPercentValue = (() => {
-    const n = parseFloat(depositPercent)
-    return Number.isFinite(n) && n >= 0 ? n : 0
-  })()
-  const depositAmount = Math.round(balanceDueValue * (depositPercentValue / 100) * 100) / 100
 
-  // A deposit that's switched on needs a real percentage before signing.
-  const depositReady = !depositRequired || depositPercentValue > 0
-  const canSign = agreed && hasSignature && name.trim().length > 0 && depositReady && !saving
+  // Deposit is set on the quote form and only displayed here — never edited.
+  const depositRequired = !!quote?.deposit_required
+  const depositPercentValue = quote?.deposit_percent ?? null
+  const depositAmount = quote?.deposit_amount ?? 0
+
+  const canSign = agreed && hasSignature && name.trim().length > 0 && !saving
 
   async function signAndClose() {
     if (!canSign || !quote || !canvasRef.current) return
@@ -289,13 +300,68 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
           // true on a signed quote — recorded explicitly with its timestamp.
           terms_agreed: agreed,
           terms_agreed_at: now,
-          deposit_required: depositRequired,
-          deposit_percent: depositRequired ? depositPercentValue : null,
-          deposit_amount: depositRequired ? depositAmount : null,
+          // Deposit deliberately not written here — it belongs to the quote
+          // form and signing must never change it.
           status: 'sold',
         })
         .eq('id', quote.id)
       if (updErr) throw updErr
+
+      // Generate the permanent signed-agreement PDF from exactly what was just
+      // agreed to. The signature is already saved by this point, so a PDF
+      // failure must not fail the signing — the button below simply won't
+      // appear, and the record stays otherwise intact.
+      try {
+        const items: AgreementLineItem[] = (quote.line_items ?? []).map(i => ({
+          serviceName: i.serviceName,
+          unit: i.unit,
+          quantity: i.quantity,
+          lineTotal: typeof i.lineTotal === 'number' ? i.lineTotal : 0,
+          rate: rateUsed(i),
+        }))
+        const canvas = canvasRef.current
+        const pdfBlob = await buildSignedAgreementPdf({
+          quoteId: quote.id,
+          customerName: quote.customer_name,
+          signerName: name.trim(),
+          phone: phone.trim() || null,
+          email: email.trim() || null,
+          address: quote.address,
+          quoteType: quote.quote_type,
+          items,
+          subtotal: quote.actual_price,
+          discount: quote.discount,
+          finalQuote: quote.final_quote,
+          tax: quote.tax,
+          balanceDue: balanceDueValue,
+          depositRequired,
+          depositPercent: depositRequired ? depositPercentValue : null,
+          depositAmount: depositRequired ? depositAmount : null,
+
+          signedAt: now,
+          termsAgreedAt: now,
+          signatureDataUrl: canvas ? canvas.toDataURL('image/png') : '',
+          signatureAspect: canvas && canvas.height ? canvas.width / canvas.height : 3,
+        })
+
+        // upsert:false — a signed agreement is written once and never replaced.
+        const pdfPath = `${BUSINESS_ID}/agreement-${quote.id}-${crypto.randomUUID()}.pdf`
+        const { error: pdfUpErr } = await supabase.storage
+          .from('quote-photos')
+          .upload(pdfPath, pdfBlob, { contentType: 'application/pdf', upsert: false })
+        if (!pdfUpErr) {
+          const pdfUrl = supabase.storage.from('quote-photos').getPublicUrl(pdfPath).data.publicUrl
+          // Only ever set this when it's still empty, so an existing signed
+          // record can never be pointed at a newer document.
+          await supabase
+            .from('quotes')
+            .update({ signed_pdf_url: pdfUrl })
+            .eq('id', quote.id)
+            .is('signed_pdf_url', null)
+        }
+      } catch {
+        // Signing already succeeded — leave the PDF reference unset.
+      }
 
       // Closing the deal marks the quote Sold — create the linked job once,
       // same as the status button on the detail screen does.
@@ -397,6 +463,17 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
                     </p>
                   )}
                 </div>
+                {quote.signed_pdf_url && (
+                  <a
+                    href={quote.signed_pdf_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm font-medium text-foreground hover:bg-white/10 transition-colors"
+                  >
+                    <Download size={15} />
+                    Download Signed Agreement (PDF)
+                  </a>
+                )}
               </div>
             </Card>
           </section>
@@ -520,68 +597,35 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
           </Card>
         </section>
 
-        {/* ── Deposit ── */}
+        {/* ── Deposit (set on the quote form — read-only here) ── */}
         <section>
           <h2 className="text-xs font-semibold text-muted uppercase tracking-widest mb-3">
             Deposit
           </h2>
           <Card>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDepositRequired(false)}
-                  className={`py-2.5 rounded-xl text-sm font-medium border transition-all active:scale-95 ${
-                    !depositRequired
-                      ? 'bg-accent/15 text-accent border-accent/30'
-                      : 'bg-transparent text-muted border-white/8 hover:bg-white/5'
-                  }`}
-                >
-                  Deposit Not Needed
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDepositRequired(true)}
-                  className={`py-2.5 rounded-xl text-sm font-medium border transition-all active:scale-95 ${
-                    depositRequired
-                      ? 'bg-accent/15 text-accent border-accent/30'
-                      : 'bg-transparent text-muted border-white/8 hover:bg-white/5'
-                  }`}
-                >
-                  Deposit Needed
-                </button>
+            {depositRequired ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between px-3.5 py-3 bg-accent/10 border border-accent/20 rounded-xl">
+                  <span className="text-sm font-semibold text-foreground">
+                    Deposit Due
+                    {depositPercentValue != null && (
+                      <span className="font-normal text-muted"> ({depositPercentValue}%)</span>
+                    )}
+                  </span>
+                  <span className="text-xl font-bold text-accent">{fmtMoney(depositAmount)}</span>
+                </div>
+                <p className="text-xs text-muted">
+                  Calculated on the quote total before tax. Required before work begins.
+                  Non-refundable once paid (see terms, section 8). The remaining balance is due upon
+                  completion.
+                </p>
               </div>
-
-              {depositRequired && (
-                <>
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="text-sm text-foreground">Deposit Percentage</label>
-                    <div className="w-28">
-                      <Input
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="any"
-                        placeholder="25"
-                        value={depositPercent}
-                        onChange={e => setDepositPercent(e.target.value)}
-                        className="text-right"
-                        rightElement={<span className="text-xs text-muted">%</span>}
-                      />
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between px-3.5 py-3 bg-accent/10 border border-accent/20 rounded-xl">
-                    <span className="text-sm font-semibold text-foreground">Deposit Due</span>
-                    <span className="text-xl font-bold text-accent">{fmtMoney(depositAmount)}</span>
-                  </div>
-                  <p className="text-xs text-muted">
-                    {depositPercentValue > 0
-                      ? `${depositPercentValue}% of the ${fmtMoney(balanceDue)} balance due. Non-refundable once paid (see terms, section 8).`
-                      : 'Enter a deposit percentage to continue.'}
-                  </p>
-                </>
-              )}
-            </div>
+            ) : (
+              <p className="text-sm text-foreground">
+                No deposit required{" "}
+                <span className="text-muted">— full balance due upon completion.</span>
+              </p>
+            )}
           </Card>
         </section>
 

@@ -73,6 +73,8 @@ type DraftData = {
   tax: string
   taxManual: boolean
   soldPrice: string
+  depositRequired: boolean
+  depositPercent: string
   paymentType: string
   paymentOther: string
   status: QuoteStatus
@@ -257,6 +259,11 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
   const [taxManual, setTaxManual] = useState(false)
   const [soldPrice, setSoldPrice] = useState('')
 
+  // Deposit — set here and nowhere else. The detail screen, public link,
+  // Close Deal screen and signed PDF all display this read-only.
+  const [depositRequired, setDepositRequired] = useState(false)
+  const [depositPercent, setDepositPercent] = useState('25')
+
   // Payment + status
   const [paymentType, setPaymentType] = useState('')
   const [paymentOther, setPaymentOther] = useState('')
@@ -303,6 +310,15 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
   )
   const finalQuote = useMemo(() => num(subtotal) - num(discount), [subtotal, discount])
   const balanceDue = finalQuote + num(tax)
+
+  // Deposit is a percentage of the PRE-TAX total (final quote = subtotal −
+  // discount). Tax is applied at the very end and is never part of the
+  // deposit calculation.
+  const depositPercentValue = (() => {
+    const n = parseFloat(depositPercent)
+    return Number.isFinite(n) && n >= 0 ? n : 0
+  })()
+  const depositAmount = Math.round(finalQuote * (depositPercentValue / 100) * 100) / 100
 
   // Auto-tax (5% of final) unless manually overridden
   useEffect(() => {
@@ -357,6 +373,8 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       tax,
       taxManual,
       soldPrice,
+      depositRequired,
+      depositPercent,
       paymentType,
       paymentOther,
       status,
@@ -384,6 +402,8 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     tax,
     taxManual,
     soldPrice,
+    depositRequired,
+    depositPercent,
     paymentType,
     paymentOther,
     status,
@@ -417,7 +437,7 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     const { data: q } = await supabase
       .from('quotes')
       .select(
-        'salesperson, customer_name, customer_phone, address, quote_type, status, notes, follow_up_date, follow_up_items, actual_price, discount, tax, sold_price, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at'
+        'salesperson, customer_name, customer_phone, address, quote_type, status, notes, follow_up_date, follow_up_items, actual_price, discount, tax, sold_price, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at, deposit_required, deposit_percent'
       )
       .eq('id', quoteId)
       .single()
@@ -448,6 +468,8 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       setTaxManual(true)
     }
     setSoldPrice(q.sold_price != null ? String(q.sold_price) : '')
+    setDepositRequired(!!q.deposit_required)
+    if (q.deposit_percent != null) setDepositPercent(String(q.deposit_percent))
     setPaymentType(q.payment_type ?? '')
     setPaymentOther(q.payment_type_other ?? '')
     setAsphaltUrl(q.asphalt_photo_url ?? null)
@@ -662,6 +684,8 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     setTax(d.tax ?? '')
     setTaxManual(!!d.taxManual)
     setSoldPrice(d.soldPrice ?? '')
+    setDepositRequired(!!d.depositRequired)
+    setDepositPercent(d.depositPercent ?? '25')
     setPaymentType(d.paymentType ?? '')
     setPaymentOther(d.paymentOther ?? '')
     setStatus(d.status ?? 'quoted')
@@ -768,6 +792,9 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       final_quote: subtotal === '' && discount === '' ? null : finalQuote,
       tax: tax === '' ? null : num(tax),
       sold_price: soldPrice === '' ? null : num(soldPrice),
+      deposit_required: depositRequired,
+      deposit_percent: depositRequired ? depositPercentValue : null,
+      deposit_amount: depositRequired ? depositAmount : null,
       payment_type: paymentType || null,
       payment_type_other: paymentType === 'Other' ? paymentOther.trim() || null : null,
       asphalt_photo_url: quoteType === 'concrete' ? null : aUrl,
@@ -1186,6 +1213,71 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
                   />
                 </div>
               </div>
+            </div>
+          </Card>
+        </section>
+
+        {/* ── Deposit ── */}
+        <section>
+          <h2 className="text-xs font-semibold text-muted uppercase tracking-widest mb-3">
+            Deposit
+          </h2>
+          <Card>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDepositRequired(false)}
+                  className={`py-2.5 rounded-xl text-sm font-medium border transition-all active:scale-95 ${
+                    !depositRequired
+                      ? 'bg-accent/15 text-accent border-accent/30'
+                      : 'bg-transparent text-muted border-white/8 hover:bg-white/5'
+                  }`}
+                >
+                  Deposit Not Needed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDepositRequired(true)}
+                  className={`py-2.5 rounded-xl text-sm font-medium border transition-all active:scale-95 ${
+                    depositRequired
+                      ? 'bg-accent/15 text-accent border-accent/30'
+                      : 'bg-transparent text-muted border-white/8 hover:bg-white/5'
+                  }`}
+                >
+                  Deposit Needed
+                </button>
+              </div>
+
+              {depositRequired && (
+                <>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-sm text-foreground">Deposit Percentage</label>
+                    <div className="w-28">
+                      <Input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="any"
+                        placeholder="25"
+                        value={depositPercent}
+                        onChange={e => setDepositPercent(e.target.value)}
+                        className="text-right"
+                        rightElement={<span className="text-xs text-muted">%</span>}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between px-3.5 py-3 bg-accent/10 border border-accent/20 rounded-xl">
+                    <span className="text-sm font-semibold text-foreground">Deposit Due</span>
+                    <span className="text-xl font-bold text-accent">{fmtMoney(depositAmount)}</span>
+                  </div>
+                  <p className="text-xs text-muted">
+                    {depositPercentValue > 0
+                      ? `${depositPercentValue}% of the ${fmtMoney(finalQuote)} final quote, before tax. Non-refundable once paid (see terms, section 8).`
+                      : 'Enter a deposit percentage.'}
+                  </p>
+                </>
+              )}
             </div>
           </Card>
         </section>

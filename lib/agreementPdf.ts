@@ -213,7 +213,8 @@ export async function buildSignedAgreementPdf(data: AgreementData): Promise<Blob
       true
     )
     paragraph(
-      'Required before work begins. Non-refundable once paid. The remaining balance is due upon completion.',
+      'Calculated on the quote total before tax. Required before work begins. Non-refundable once paid. ' +
+        'The remaining balance is due upon completion.',
       9
     )
   } else {

@@ -213,7 +213,7 @@ export default async function SharedQuotePage({ params }: { params: Promise<{ id
               {fmtMoney(balanceDue)}
             </span>
           </div>
-          {/* Deposit — only shown once a deposit decision has been recorded at signing. */}
+          {/* Deposit — set on the quote form; shown here read-only. */}
           {quote.deposit_required != null && (
             <div className="mt-4 rounded-2xl border border-white/10 px-5 py-4">
               {quote.deposit_required ? (
@@ -230,8 +230,8 @@ export default async function SharedQuotePage({ params }: { params: Promise<{ id
                     </span>
                   </div>
                   <p className="mt-1.5 text-xs leading-relaxed text-muted">
-                    Required before work begins. Non-refundable once paid. The remaining balance is
-                    due upon completion.
+                    Calculated on the quote total before tax. Required before work begins.
+                    Non-refundable once paid. The remaining balance is due upon completion.
                   </p>
                 </>
               ) : (
