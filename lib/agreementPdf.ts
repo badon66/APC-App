@@ -40,6 +40,8 @@ export type AgreementData = {
   discount: number | null
   finalQuote: number | null
   tax: number | null
+  feeLabel: string | null
+  feeAmount: number | null
   balanceDue: number
   depositRequired: boolean
   depositPercent: number | null
@@ -197,6 +199,9 @@ export async function buildSignedAgreementPdf(data: AgreementData): Promise<Blob
   row('Quote Discount', fmtMoney(data.discount))
   row('Final Quote', fmtMoney(data.finalQuote), true)
   row('Tax', fmtMoney(data.tax))
+  if (data.feeAmount != null && data.feeAmount > 0) {
+    row(data.feeLabel || 'Additional Fee', fmtMoney(data.feeAmount))
+  }
   ensureSpace(30)
   doc.setDrawColor(...RULE_GREY)
   doc.line(MARGIN, y - 6, PAGE.width - MARGIN, y - 6)

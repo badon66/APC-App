@@ -13,6 +13,7 @@ import { BUSINESS_ID } from '@/lib/config'
 import { TERMS_SUMMARY, TERMS_INTRO, FULL_TERMS } from '@/lib/terms'
 import { downloadTermsPdf } from '@/lib/termsPdf'
 import { buildSignedAgreementPdf, type AgreementLineItem } from '@/lib/agreementPdf'
+import { computeBalanceDue } from '@/lib/totals'
 
 // The Close Deal signing screen. One component, two entry points:
 //   • 'app'    — /quotes/[id]/close, used by the salesperson in person
@@ -59,10 +60,12 @@ type Quote = {
   deposit_required: boolean | null
   deposit_percent: number | null
   deposit_amount: number | null
+  fee_label: string | null
+  fee_amount: number | null
 }
 
 const QUOTE_FIELDS =
-  'id, customer_name, customer_phone, address, quote_type, salesperson, actual_price, discount, final_quote, tax, line_items, job_id, signature_url, signed_name, signed_phone, signed_email, signed_at, terms_agreed, terms_agreed_at, deposit_required, deposit_percent, deposit_amount, signed_pdf_url'
+  'id, customer_name, customer_phone, address, quote_type, salesperson, actual_price, discount, final_quote, tax, line_items, job_id, signature_url, signed_name, signed_phone, signed_email, signed_at, terms_agreed, terms_agreed_at, deposit_required, deposit_percent, deposit_amount, signed_pdf_url, fee_label, fee_amount'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -140,6 +143,7 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drawingRef = useRef(false)
   const lastPointRef = useRef<{ x: number; y: number } | null>(null)
+  const resizeObsRef = useRef<ResizeObserver | null>(null)
   const [hasSignature, setHasSignature] = useState(false)
 
   const [saving, setSaving] = useState(false)
@@ -165,23 +169,58 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
 
   // Size the canvas to its rendered width (retina-aware) and paint the white
   // "paper" background the signature is drawn on.
-  const initCanvas = useCallback((canvas: HTMLCanvasElement | null) => {
-    canvasRef.current = canvas
-    if (!canvas) return
+  //
+  // Measured live rather than once at mount: if the element is laid out at
+  // zero width (rendered while hidden) the canvas would stay 0×0 and
+  // toBlob() would yield nothing, and on rotation the drawing surface would
+  // no longer match the CSS size, putting strokes in the wrong place.
+  // Anything already drawn is carried across a resize.
+  const sizeCanvas = useCallback((canvas: HTMLCanvasElement) => {
     const dpr = window.devicePixelRatio || 1
     const rect = canvas.getBoundingClientRect()
-    canvas.width = rect.width * dpr
-    canvas.height = rect.height * dpr
+    const cssWidth = Math.round(rect.width)
+    const cssHeight = Math.round(rect.height)
+    if (cssWidth <= 0 || cssHeight <= 0) return // not laid out yet — wait for the observer
+    if (canvas.width === cssWidth * dpr && canvas.height === cssHeight * dpr) return
+
+    let previous: HTMLCanvasElement | null = null
+    if (canvas.width > 0 && canvas.height > 0) {
+      previous = document.createElement('canvas')
+      previous.width = canvas.width
+      previous.height = canvas.height
+      previous.getContext('2d')?.drawImage(canvas, 0, 0)
+    }
+
+    canvas.width = cssWidth * dpr
+    canvas.height = cssHeight * dpr
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.scale(dpr, dpr)
     ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, rect.width, rect.height)
+    ctx.fillRect(0, 0, cssWidth, cssHeight)
+    if (previous) ctx.drawImage(previous, 0, 0, cssWidth, cssHeight)
     ctx.strokeStyle = '#1a1a1a'
     ctx.lineWidth = 2
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
   }, [])
+
+  const initCanvas = useCallback(
+    (canvas: HTMLCanvasElement | null) => {
+      canvasRef.current = canvas
+      resizeObsRef.current?.disconnect()
+      resizeObsRef.current = null
+      if (!canvas) return
+      sizeCanvas(canvas)
+      const observer = new ResizeObserver(() => sizeCanvas(canvas))
+      observer.observe(canvas)
+      resizeObsRef.current = observer
+    },
+    [sizeCanvas]
+  )
+
+  useEffect(() => () => resizeObsRef.current?.disconnect(), [])
 
   function canvasPoint(e: React.PointerEvent<HTMLCanvasElement>) {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -240,7 +279,7 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
 
   // ─── Sign & close ───────────────────────────────────────────────────────────
 
-  const balanceDueValue = (quote?.final_quote ?? 0) + (quote?.tax ?? 0)
+  const balanceDueValue = computeBalanceDue(quote?.final_quote, quote?.tax, quote?.fee_amount)
 
   // Deposit is set on the quote form and only displayed here — never edited.
   const depositRequired = !!quote?.deposit_required
@@ -255,6 +294,13 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
     setError('')
 
     try {
+      // A canvas with no drawing surface produces no image — surface that
+      // plainly rather than as a generic save failure.
+      if (!canvasRef.current.width || !canvasRef.current.height) {
+        setSaving(false)
+        setError('The signature pad did not load correctly. Please reload the page and try again.')
+        return
+      }
       const blob = await new Promise<Blob | null>(resolve =>
         canvasRef.current!.toBlob(resolve, 'image/png')
       )
@@ -333,6 +379,8 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
           discount: quote.discount,
           finalQuote: quote.final_quote,
           tax: quote.tax,
+          feeLabel: quote.fee_label,
+          feeAmount: quote.fee_amount,
           balanceDue: balanceDueValue,
           depositRequired,
           depositPercent: depositRequired ? depositPercentValue : null,
@@ -485,6 +533,16 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
             </h2>
             <Card>
               <div className="space-y-3">
+                {quote.fee_amount != null && quote.fee_amount > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted">
+                      {quote.fee_label || 'Additional Fee'}
+                    </span>
+                    <span className="text-sm font-semibold text-foreground">
+                      {fmtMoney(quote.fee_amount)}
+                    </span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted">Balance Due</span>
                   <span className="text-lg font-bold text-accent">
@@ -581,6 +639,15 @@ export default function CloseDealScreen({ quoteId, variant }: CloseDealScreenPro
               <p className="text-xl font-bold text-accent">{fmtMoney(balanceDue)}</p>
             </div>
           </div>
+          {/* Additional fee — set on the quote form, shown read-only. */}
+          {quote.fee_amount != null && quote.fee_amount > 0 && (
+            <div className="mt-3 pt-3 border-t border-white/8 flex items-center justify-between">
+              <span className="text-sm text-muted">{quote.fee_label || 'Additional Fee'}</span>
+              <span className="text-sm font-semibold text-foreground">
+                {fmtMoney(quote.fee_amount)}
+              </span>
+            </div>
+          )}
         </Card>
 
         {/* ── Signer details ── */}

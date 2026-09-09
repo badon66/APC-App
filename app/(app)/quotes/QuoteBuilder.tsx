@@ -14,6 +14,7 @@ import VoiceQuoteFill, { type VoiceFillResult } from './VoiceQuoteFill'
 import { supabase } from '@/lib/supabase'
 import { BUSINESS_ID } from '@/lib/config'
 import type { Tier, QuoteStatus, SurfaceType } from '@/lib/config'
+import { computeFeeAmount, computeBalanceDue, isFeeType, type FeeType } from '@/lib/totals'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,9 @@ type DraftData = {
   tax: string
   taxManual: boolean
   soldPrice: string
+  feeLabel: string
+  feeType: FeeType
+  feeValue: string
   depositRequired: boolean
   depositPercent: string
   paymentType: string
@@ -259,6 +263,12 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
   const [taxManual, setTaxManual] = useState(false)
   const [soldPrice, setSoldPrice] = useState('')
 
+  // Additional fee — optional, estimator-named (e.g. "Travel Fee"). Applied
+  // after tax; blank or zero leaves Balance Due unchanged.
+  const [feeLabel, setFeeLabel] = useState('')
+  const [feeType, setFeeType] = useState<FeeType>('flat')
+  const [feeValue, setFeeValue] = useState('')
+
   // Deposit — set here and nowhere else. The detail screen, public link,
   // Close Deal screen and signed PDF all display this read-only.
   const [depositRequired, setDepositRequired] = useState(false)
@@ -309,7 +319,10 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     [items]
   )
   const finalQuote = useMemo(() => num(subtotal) - num(discount), [subtotal, discount])
-  const balanceDue = finalQuote + num(tax)
+
+  // Additional fee: a percentage of (final quote + tax), or a flat amount.
+  const feeAmount = computeFeeAmount(finalQuote, num(tax), feeType, num(feeValue))
+  const balanceDue = computeBalanceDue(finalQuote, num(tax), feeAmount)
 
   // Deposit is a percentage of the PRE-TAX total (final quote = subtotal −
   // discount). Tax is applied at the very end and is never part of the
@@ -373,6 +386,9 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       tax,
       taxManual,
       soldPrice,
+      feeLabel,
+      feeType,
+      feeValue,
       depositRequired,
       depositPercent,
       paymentType,
@@ -402,6 +418,9 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     tax,
     taxManual,
     soldPrice,
+    feeLabel,
+    feeType,
+    feeValue,
     depositRequired,
     depositPercent,
     paymentType,
@@ -437,7 +456,7 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     const { data: q } = await supabase
       .from('quotes')
       .select(
-        'salesperson, customer_name, customer_phone, address, quote_type, status, notes, follow_up_date, follow_up_items, actual_price, discount, tax, sold_price, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at, deposit_required, deposit_percent'
+        'salesperson, customer_name, customer_phone, address, quote_type, status, notes, follow_up_date, follow_up_items, actual_price, discount, tax, sold_price, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at, deposit_required, deposit_percent, fee_label, fee_type, fee_value'
       )
       .eq('id', quoteId)
       .single()
@@ -468,6 +487,9 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       setTaxManual(true)
     }
     setSoldPrice(q.sold_price != null ? String(q.sold_price) : '')
+    setFeeLabel(q.fee_label ?? '')
+    setFeeType(isFeeType(q.fee_type) ? q.fee_type : 'flat')
+    setFeeValue(q.fee_value != null ? String(q.fee_value) : '')
     setDepositRequired(!!q.deposit_required)
     if (q.deposit_percent != null) setDepositPercent(String(q.deposit_percent))
     setPaymentType(q.payment_type ?? '')
@@ -684,6 +706,9 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
     setTax(d.tax ?? '')
     setTaxManual(!!d.taxManual)
     setSoldPrice(d.soldPrice ?? '')
+    setFeeLabel(d.feeLabel ?? '')
+    setFeeType(isFeeType(d.feeType) ? d.feeType : 'flat')
+    setFeeValue(d.feeValue ?? '')
     setDepositRequired(!!d.depositRequired)
     setDepositPercent(d.depositPercent ?? '25')
     setPaymentType(d.paymentType ?? '')
@@ -792,6 +817,11 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
       final_quote: subtotal === '' && discount === '' ? null : finalQuote,
       tax: tax === '' ? null : num(tax),
       sold_price: soldPrice === '' ? null : num(soldPrice),
+      // Additional fee — all four values null when unused.
+      fee_label: feeAmount > 0 ? feeLabel.trim() || 'Additional Fee' : null,
+      fee_type: feeAmount > 0 ? feeType : null,
+      fee_value: feeAmount > 0 ? num(feeValue) : null,
+      fee_amount: feeAmount > 0 ? feeAmount : null,
       deposit_required: depositRequired,
       deposit_percent: depositRequired ? depositPercentValue : null,
       deposit_amount: depositRequired ? depositAmount : null,
@@ -1190,6 +1220,79 @@ export default function QuoteBuilder({ quoteId }: QuoteBuilderProps) {
                     className="text-right"
                   />
                 </div>
+              </div>
+
+              {/* ── Additional Fee (optional) ── */}
+              <div className="border-t border-white/8" />
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-foreground">Additional Fee</span>
+                  <span className="text-xs text-muted">Optional</span>
+                </div>
+                <Input
+                  placeholder="Fee name (e.g. Travel Fee)"
+                  value={feeLabel}
+                  onChange={e => setFeeLabel(e.target.value)}
+                />
+                <div className="flex items-center gap-2">
+                  <div className="grid grid-cols-2 gap-2 flex-1">
+                    <button
+                      type="button"
+                      onClick={() => setFeeType('percent')}
+                      className={`py-2.5 rounded-xl text-sm font-medium border transition-all active:scale-95 ${
+                        feeType === 'percent'
+                          ? 'bg-accent/15 text-accent border-accent/30'
+                          : 'bg-transparent text-muted border-white/8 hover:bg-white/5'
+                      }`}
+                    >
+                      Percentage
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFeeType('flat')}
+                      className={`py-2.5 rounded-xl text-sm font-medium border transition-all active:scale-95 ${
+                        feeType === 'flat'
+                          ? 'bg-accent/15 text-accent border-accent/30'
+                          : 'bg-transparent text-muted border-white/8 hover:bg-white/5'
+                      }`}
+                    >
+                      Flat Amount
+                    </button>
+                  </div>
+                  <div className="w-28 shrink-0">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="any"
+                      placeholder={feeType === 'percent' ? '0' : '0.00'}
+                      value={feeValue}
+                      onChange={e => setFeeValue(e.target.value)}
+                      className="text-right"
+                      rightElement={
+                        <span className="text-xs text-muted">
+                          {feeType === 'percent' ? '%' : '$'}
+                        </span>
+                      }
+                    />
+                  </div>
+                </div>
+                {feeAmount > 0 && (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-foreground">
+                        {feeLabel.trim() || 'Additional Fee'}
+                      </span>
+                      <span className="text-sm font-semibold text-foreground">
+                        {fmtMoney(feeAmount)}
+                      </span>
+                    </div>
+                    {feeType === 'percent' && (
+                      <p className="text-xs text-muted">
+                        {num(feeValue)}% of {fmtMoney(finalQuote + num(tax))} (final quote + tax).
+                      </p>
+                    )}
+                  </>
+                )}
               </div>
 
               <div className="flex items-center justify-between px-3.5 py-3 bg-accent/10 border border-accent/20 rounded-xl">

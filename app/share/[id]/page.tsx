@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { BUSINESS_NAME } from '@/lib/config'
+import { computeBalanceDue } from '@/lib/totals'
 import type { Tier } from '@/lib/config'
 
 // Public, read-only quote summary. Anyone with the link can view it — no login.
@@ -75,7 +76,7 @@ export default async function SharedQuotePage({ params }: { params: Promise<{ id
   const { data: quote } = await supabase
     .from('quotes')
     .select(
-      'id, customer_name, customer_phone, address, status, notes, actual_price, discount, final_quote, tax, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at, deposit_required, deposit_percent, deposit_amount, signature_url'
+      'id, customer_name, customer_phone, address, status, notes, actual_price, discount, final_quote, tax, payment_type, payment_type_other, asphalt_photo_url, concrete_photo_url, context_photos, line_items, job_id, created_at, deposit_required, deposit_percent, deposit_amount, signature_url, fee_label, fee_type, fee_value, fee_amount'
     )
     .eq('id', id)
     .single()
@@ -102,7 +103,7 @@ export default async function SharedQuotePage({ params }: { params: Promise<{ id
   // A saved signature is what makes a deal closed — a signed quote can only be
   // viewed, never resigned.
   const isSigned = !!quote.signature_url
-  const balanceDue = (quote.final_quote ?? 0) + (quote.tax ?? 0)
+  const balanceDue = computeBalanceDue(quote.final_quote, quote.tax, quote.fee_amount)
   const paymentLabel =
     quote.payment_type === 'Other'
       ? quote.payment_type_other || 'Other'
@@ -204,6 +205,12 @@ export default async function SharedQuotePage({ params }: { params: Promise<{ id
             <TotalRow label="Quote Discount" value={fmtMoney(quote.discount)} />
             <TotalRow label="Final Quote" value={fmtMoney(quote.final_quote)} strong />
             <TotalRow label="Tax" value={fmtMoney(quote.tax)} />
+            {quote.fee_amount != null && quote.fee_amount > 0 && (
+              <TotalRow
+                label={quote.fee_label || 'Additional Fee'}
+                value={fmtMoney(quote.fee_amount)}
+              />
+            )}
           </div>
           <div className="mt-6 flex items-center justify-between rounded-2xl border border-accent/25 bg-accent/10 px-5 py-4">
             <span className="text-sm font-semibold uppercase tracking-[0.15em] text-foreground">

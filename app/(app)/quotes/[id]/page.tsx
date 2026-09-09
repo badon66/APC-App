@@ -8,6 +8,7 @@ import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
 import { supabase } from '@/lib/supabase'
 import { BUSINESS_ID } from '@/lib/config'
+import { computeBalanceDue } from '@/lib/totals'
 import type { Tier, QuoteStatus } from '@/lib/config'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -59,6 +60,10 @@ type Quote = {
   terms_agreed: boolean | null
   terms_agreed_at: string | null
   signed_pdf_url: string | null
+  fee_label: string | null
+  fee_type: string | null
+  fee_value: number | null
+  fee_amount: number | null
   deposit_required: boolean | null
   deposit_percent: number | null
   deposit_amount: number | null
@@ -223,7 +228,7 @@ export default function QuoteDetailPage() {
   }
 
   const items = quote.line_items ?? []
-  const balanceDue = (quote.final_quote ?? 0) + (quote.tax ?? 0)
+  const balanceDue = computeBalanceDue(quote.final_quote, quote.tax, quote.fee_amount)
   const paymentLabel =
     quote.payment_type === 'Other'
       ? quote.payment_type_other || 'Other'
@@ -457,6 +462,13 @@ export default function QuoteDetailPage() {
               <Row label="Quote Discount" value={fmtMoney(quote.discount)} />
               <Row label="Final Quote" value={fmtMoney(quote.final_quote)} bold />
               <Row label="Tax" value={fmtMoney(quote.tax)} />
+              {/* Additional fee — set on the quote form, shown read-only. */}
+              {quote.fee_amount != null && quote.fee_amount > 0 && (
+                <Row
+                  label={quote.fee_label || 'Additional Fee'}
+                  value={fmtMoney(quote.fee_amount)}
+                />
+              )}
               <div className="flex items-center justify-between px-3.5 py-3 bg-accent/10 border border-accent/20 rounded-xl">
                 <span className="text-sm font-semibold text-foreground">Balance Due</span>
                 <span className="text-2xl font-bold text-accent">{fmtMoney(balanceDue)}</span>
